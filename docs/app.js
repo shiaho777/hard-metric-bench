@@ -11,8 +11,6 @@ const BENCH_META = {
     weights: [["Decode Speed", 28], ["TTFT", 24], ["Batch Scaling", 16], ["Long Context Scaling", 16], ["Dynamic Memory", 10], ["Logits Correctness", 6]] },
   train: { name: "Model Training",
     weights: [["Quality Ceiling", 28], ["Generalization Gain", 24], ["Time To Quality", 18], ["Training Throughput", 15], ["Inference Speed", 10], ["Memory Efficiency", 5]] },
-  webapp: { name: "Web-to-App",
-    weights: [["Build Integrity", 28], ["Core Feature Coverage", 28], ["Runtime Breadth", 16], ["Packaging Depth", 16], ["Project Quality", 12]] },
 };
 
 const state = {
