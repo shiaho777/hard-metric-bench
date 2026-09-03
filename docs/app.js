@@ -1,4 +1,5 @@
-/* Hard Metric Bench leaderboard app. No build step, no dependencies. */
+/* Hard Metric Bench leaderboard app. No build step, no dependencies.
+   One leaderboard per benchmark — scores are never averaged across benchmarks. */
 "use strict";
 
 const BENCH_META = {
@@ -15,42 +16,13 @@ const BENCH_META = {
 };
 
 const state = {
-  data: null, order: [], sortKey: "overall", sortDir: -1,
-  benchTab: "vecdb", selected: new Set(), modalEntry: null, modalBench: null,
+  data: null, benchTab: "vecdb",
+  selected: new Set(), modalEntry: null, modalBench: null,
 };
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
-
-function overallOf(entry) {
-  const vals = Object.values(entry.scores || {}).map((s) => num(s.overall));
-  if (!vals.length) return 0;
-  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
-}
-
-function bestPhase(entry) {
-  // Highest passed phase, e.g. "P3"; "—" when none.
-  const rank = { "Phase 1": 1, "Phase 2": 2, "Phase 3": 3, "Phase 4": 4, "Phase 5": 5 };
-  let best = 0, label = "—";
-  for (const s of Object.values(entry.scores || {})) {
-    for (const p of (s.phases || [])) {
-      if (p.passed && (rank[p.name] || 0) > best) { best = rank[p.name]; label = p.name.replace("Phase ", "P"); }
-    }
-  }
-  return { label, level: best };
-}
-
-function phasePips(entry) {
-  const rank = { "Phase 1": 1, "Phase 2": 2, "Phase 3": 3, "Phase 4": 4, "Phase 5": 5 };
-  let best = 0;
-  for (const s of Object.values(entry.scores || {}))
-    for (const p of (s.phases || []))
-      if (p.passed) best = Math.max(best, rank[p.name] || 0);
-  let out = "";
-  for (let i = 1; i <= 5; i++) out += `<i class="${i <= best ? "on" : "off"}"></i>`;
-  return `<span class="phase-pip" title="Highest passed: P${best}">${out}</span>`;
-}
 
 function bar(score) {
   const v = Math.max(0, Math.min(100, num(score)));
@@ -61,8 +33,7 @@ function bar(score) {
 function renderHero() {
   const results = state.data.results;
   const benches = state.data.benchmarks;
-  const el = $("heroStats");
-  el.innerHTML = [
+  $("heroStats").innerHTML = [
     [benches.length, "Benchmarks"],
     [results.length, "Models tested"],
     [state.data.meta.benchmark_version, "Harness version"],
@@ -75,72 +46,48 @@ function renderHero() {
     : "";
 }
 
-/* ---------- main table ---------- */
-function filteredResults() {
+/* ---------- per-benchmark leaderboard ---------- */
+function filteredBenchResults() {
   const q = $("search").value.trim().toLowerCase();
   const vf = $("verFilter").value;
-  let list = state.data.results.filter((r) => {
-    if (vf === "current" && r.legacy) return false;
-    if (q && !(r.model + " " + (r.vendor || "")).toLowerCase().includes(q)) return false;
-    return true;
-  });
-  const val = (r) => {
-    if (state.sortKey === "overall") return overallOf(r);
-    if (state.sortKey === "date") return r.date || "";
-    if (state.sortKey === "model") return r.model;
-    return num((r.scores[state.sortKey] || {}).overall);
-  };
-  list = list.slice().sort((a, b) => {
-    const va = val(a), vb = val(b);
-    if (typeof va === "string") return state.sortDir * va.localeCompare(vb);
-    return state.sortDir * (va - vb);
-  });
-  return list;
+  return state.data.results
+    .filter((r) => r.scores[state.benchTab])
+    .filter((r) => {
+      if (vf === "current" && r.legacy) return false;
+      if (q && !(r.model + " " + (r.vendor || "")).toLowerCase().includes(q)) return false;
+      return true;
+    })
+    .slice()
+    .sort((x, y) => num(y.scores[state.benchTab].overall) - num(x.scores[state.benchTab].overall));
 }
 
-function sortArrow(key) {
-  if (state.sortKey !== key) return "";
-  return state.sortDir === -1 ? " ▼" : " ▲";
+function renderBenchTabs() {
+  const counts = {};
+  for (const b of state.data.benchmarks)
+    counts[b.key] = state.data.results.filter((r) => r.scores[b.key]).length;
+  $("benchTabs").innerHTML = state.data.benchmarks.map((b) =>
+    `<button data-b="${b.key}" class="${b.key === state.benchTab ? "active" : ""}">${esc(b.name)} · ${counts[b.key]}</button>`).join("");
+  $("benchTabs").querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => { state.benchTab = btn.dataset.b; renderBenchTabs(); renderBenchTable(); };
+  });
 }
 
-function renderTable() {
-  const benches = state.data.benchmarks;
-  const head = [`<th>#</th>`, `<th class="sortable" data-k="model">Model${sortArrow("model")}</th>`];
-  for (const b of benches) head.push(`<th class="sortable" data-k="${b.key}">${esc(b.name)}${sortArrow(b.key)}</th>`);
-  head.push(`<th class="sortable" data-k="overall">Overall${sortArrow("overall")}</th>`, `<th>Phase</th>`, `<th class="sortable" data-k="date">Date${sortArrow("date")}</th>`, `<th></th>`);
-  $("mainHead").innerHTML = head.join("");
-  $("mainHead").querySelectorAll("th.sortable").forEach((th) => {
-    th.onclick = () => {
-      const k = th.dataset.k;
-      if (state.sortKey === k) state.sortDir *= -1;
-      else { state.sortKey = k; state.sortDir = k === "model" || k === "date" ? 1 : -1; }
-      renderTable();
-    };
-  });
-
-  const list = filteredResults();
-  state.order = list.map((r) => r.id);
-  $("mainBody").innerHTML = list.map((r, i) => {
-    const ov = overallOf(r);
-    const bp = bestPhase(r);
-    const cells = benches.map((b) => {
-      const s = r.scores[b.key];
-      if (!s) return `<td class="score-cell"><span style="color:#94a3b8">—</span></td>`;
-      return `<td class="score-cell"><b>${num(s.overall).toFixed(1)}</b>${bar(s.overall)}</td>`;
-    }).join("");
+function renderBenchTable() {
+  $("benchHead").innerHTML = `<th>#</th><th>Model</th><th>Score</th><th>Top phase</th><th>Date</th><th></th>`;
+  const list = filteredBenchResults();
+  $("benchBody").innerHTML = list.map((r, i) => {
+    const s = r.scores[state.benchTab];
     const badges = `${r.open_weights ? `<span class="badge open">open</span>` : ""}${r.legacy ? `<span class="badge legacy">legacy</span>` : ""}${String(r.heldout) === "on" ? `<span class="badge heldout">held-out</span>` : ""}`;
     return `<tr>
       <td><span class="rank r${i + 1}">${i + 1}</span></td>
-      <td class="model-cell"><b>${esc(r.model)}${badges}</b><span>${esc(r.vendor || "")} · ${esc(r.date || "")} · ${Object.keys(r.scores || {}).length}/5 benchmarks</span></td>
-      ${cells}
-      <td class="overall-cell"><b>${ov.toFixed(1)}</b>${bar(ov)}</td>
-      <td>${bp.label}${phasePips(r)}</td>
+      <td class="model-cell"><b>${esc(r.model)}${badges}</b><span>${esc(r.vendor || "")}</span></td>
+      <td class="score-cell"><b>${num(s.overall).toFixed(1)}</b>${bar(s.overall)}</td>
+      <td>${esc(s.highest_phase || "None")}</td>
       <td style="white-space:nowrap">${esc(r.date || "—")}</td>
       <td style="white-space:nowrap"><input type="checkbox" data-sel="${esc(r.id)}" ${state.selected.has(r.id) ? "checked" : ""} aria-label="Select to compare"> <button class="linklike" data-detail="${esc(r.id)}">Detail</button></td>
     </tr>`;
-  }).join("") || `<tr><td colspan="12" style="text-align:center;color:#94a3b8;padding:28px">No matching results</td></tr>`;
-
-  $("mainBody").querySelectorAll("[data-sel]").forEach((cb) => {
+  }).join("") || `<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:28px">No data for this benchmark yet</td></tr>`;
+  $("benchBody").querySelectorAll("[data-sel]").forEach((cb) => {
     cb.onchange = () => {
       if (cb.checked) {
         if (state.selected.size >= 3) { cb.checked = false; alert("Compare up to 3 models at a time"); return; }
@@ -149,8 +96,8 @@ function renderTable() {
       renderCompareBar();
     };
   });
-  $("mainBody").querySelectorAll("[data-detail]").forEach((btn) => {
-    btn.onclick = () => openModal(btn.dataset.detail);
+  $("benchBody").querySelectorAll("[data-detail]").forEach((btn) => {
+    btn.onclick = () => openModal(btn.dataset.detail, state.benchTab);
   });
   renderCompareBar();
 }
@@ -172,45 +119,16 @@ function renderCompare() {
   if (!list.length) return;
   $("comparePanel").classList.remove("hidden");
   $("compareGrid").innerHTML = state.data.benchmarks.map((b) => {
-    const rows = list.map((r) => ({ r, v: num((r.scores[b.key] || {}).overall) }));
-    const mx = Math.max(...rows.map((x) => x.v));
+    const rows = list.map((r) => ({ r, v: r.scores[b.key] == null ? null : num(r.scores[b.key].overall) }));
+    const scored = rows.filter((x) => x.v != null);
+    const mx = scored.length ? Math.max(...scored.map((x) => x.v)) : -1;
     return `<div class="cmp-group"><h4>${esc(b.name)}</h4>` +
-      rows.map(({ r, v }) => `<div class="cmp-row ${v === mx && mx > 0 ? "winner" : ""}"><span>${esc(r.model)}</span><div class="cmp-bar"><i style="width:${v}%"></i></div><b>${v.toFixed(1)}</b></div>`).join("") +
+      rows.map(({ r, v }) => v == null
+        ? `<div class="cmp-row"><span>${esc(r.model)}</span><span style="color:#94a3b8">not tested</span><span></span></div>`
+        : `<div class="cmp-row ${v === mx && mx > 0 ? "winner" : ""}"><span>${esc(r.model)}</span><div class="cmp-bar"><i style="width:${v}%"></i></div><b>${v.toFixed(1)}</b></div>`).join("") +
       `</div>`;
   }).join("");
   $("comparePanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-
-/* ---------- per-benchmark tabs ---------- */
-function renderBenchTabs() {
-  $("benchTabs").innerHTML = state.data.benchmarks.map((b) =>
-    `<button data-b="${b.key}" class="${b.key === state.benchTab ? "active" : ""}">${esc(b.name)}</button>`).join("");
-  $("benchTabs").querySelectorAll("button").forEach((btn) => {
-    btn.onclick = () => { state.benchTab = btn.dataset.b; renderBenchTabs(); renderBenchTable(); };
-  });
-}
-
-function renderBenchTable() {
-  const b = state.data.benchmarks.find((x) => x.key === state.benchTab);
-  $("benchHead").innerHTML = `<th>#</th><th>Model</th><th>Score</th><th>Top phase</th><th>Violations</th><th>Date</th><th></th>`;
-  const list = state.data.results.filter((r) => r.scores[b.key])
-    .slice().sort((x, y) => num(y.scores[b.key].overall) - num(x.scores[b.key].overall));
-  $("benchBody").innerHTML = list.map((r, i) => {
-    const s = r.scores[b.key];
-    const v = (s.violations || []).length;
-    return `<tr>
-      <td><span class="rank r${i + 1}">${i + 1}</span></td>
-      <td class="model-cell"><b>${esc(r.model)}</b><span>${esc(r.vendor || "")}</span></td>
-      <td class="score-cell"><b>${num(s.overall).toFixed(1)}</b>${bar(s.overall)}</td>
-      <td>${esc(s.highest_phase || "None")}</td>
-      <td>${v ? `<span style="color:#dc2626">⚠ ${v}</span>` : `<span style="color:#06917a">✓ 0</span>`}</td>
-      <td>${esc(r.date || "—")}</td>
-      <td><button class="linklike" data-detail="${esc(r.id)}" data-bench="${b.key}">Detail</button></td>
-    </tr>`;
-  }).join("") || `<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:28px">No data for this benchmark yet</td></tr>`;
-  $("benchBody").querySelectorAll("[data-detail]").forEach((btn) => {
-    btn.onclick = () => openModal(btn.dataset.detail, btn.dataset.bench);
-  });
 }
 
 /* ---------- modal ---------- */
@@ -264,16 +182,19 @@ function renderModal() {
     </div>`).join("");
   const phaseHtml = (s.phases || []).map((p) =>
     `<span class="phase ${p.passed ? "pass" : "fail"}">${p.passed ? "✓" : "✕"} ${esc(p.name)}</span>`).join("");
-  const violHtml = (s.violations || []).map((v) => `<div class="viol">⚠ ${esc(v)}</div>`).join("");
+  const viols = s.violations || [];
+  const diagHtml = viols.length
+    ? `<details class="weights" style="margin-top:12px"><summary>Run diagnostics (${viols.length})</summary>${viols.map((v) => `<div class="viol">⚠ ${esc(v)}</div>`).join("")}</details>`
+    : "";
   $("modalBody").innerHTML = `
     <h2>${esc(r.model)}</h2>
-    <div class="meta">${esc(r.vendor || "")} · ${esc(r.date || "")} · harness ${esc(String(r.benchmark_version))} · held-out ${esc(String(r.heldout))} · overall ${overallOf(r).toFixed(1)}${r.note ? `<br>📝 ${esc(r.note)}` : ""}</div>
+    <div class="meta">${esc(r.vendor || "")} · ${esc(r.date || "")} · harness ${esc(String(r.benchmark_version))} · held-out ${esc(String(r.heldout))}${r.note ? `<br>📝 ${esc(r.note)}` : ""}</div>
     <div class="mtabs">${tabs}</div>
     <h3 style="margin:6px 0">${esc(meta.name || "")} <span style="color:#94a3b8;font-weight:400;font-size:13px">${num(s.overall).toFixed(2)} pts · ${esc(s.highest_phase || "None")}</span></h3>
     ${radarSVG(dims)}
     <div class="phases">${phaseHtml}</div>
     ${dimHtml}
-    ${violHtml}
+    ${diagHtml}
   `;
   $("modalBody").querySelectorAll("[data-mt]").forEach((btn) => {
     btn.onclick = () => { state.modalBench = btn.dataset.mt; renderModal(); };
@@ -282,7 +203,7 @@ function renderModal() {
 
 /* ---------- method weights ---------- */
 function renderWeights() {
-  $("weightsGrid").innerHTML = Object.entries(BENCH_META).map(([k, m]) =>
+  $("weightsGrid").innerHTML = Object.entries(BENCH_META).map(([, m]) =>
     `<h4 style="margin:12px 0 4px">${esc(m.name)}</h4>
      <table><tbody>${m.weights.map(([n, w]) => `<tr><td>${esc(n)}</td><td><b>${w}%</b></td></tr>`).join("")}</tbody></table>`
   ).join("");
@@ -294,14 +215,13 @@ async function boot() {
   if (!res.ok) throw new Error("HTTP " + res.status);
   state.data = await res.json();
   renderHero();
-  renderTable();
   renderBenchTabs();
   renderBenchTable();
   renderWeights();
-  $("search").addEventListener("input", renderTable);
-  $("verFilter").addEventListener("change", renderTable);
+  $("search").addEventListener("input", renderBenchTable);
+  $("verFilter").addEventListener("change", renderBenchTable);
   $("compareGo").onclick = renderCompare;
-  $("compareClear").onclick = () => { state.selected.clear(); renderTable(); };
+  $("compareClear").onclick = () => { state.selected.clear(); renderBenchTable(); };
   $("modalX").onclick = closeModal;
   $("modalBackdrop").addEventListener("click", (e) => { if (e.target.id === "modalBackdrop") closeModal(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
